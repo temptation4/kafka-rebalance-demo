@@ -606,30 +606,417 @@ http://localhost:30081
 
 ---
 
-# Interview Questions Covered
+# Kafka Consumer
 
-* What happens when a producer sends a message?
-* How does Kafka calculate partitions?
-* Why do messages with the same key go to the same partition?
-* What is Murmur2 hashing?
-* What is Offset?
-* What is ACK?
-* What is Serialization?
-* Why is ordering guaranteed only within a partition?
-* How are topics created?
-* How does Spring Boot integrate with Kafka?
+## Consumer Service
+
+The consumer continuously polls Kafka for new messages.
+
+```java
+@KafkaListener(
+        topics = "orders",
+        groupId = "order-group"
+)
+public void consume(String message,
+        @Header(KafkaHeaders.RECEIVED_PARTITION) int partition,
+        @Header(KafkaHeaders.OFFSET) long offset) {
+
+    System.out.println(
+        "Received : " + message +
+        " Partition : " + partition +
+        " Offset : " + offset
+    );
+}
+```
 
 ---
 
-# Next Steps
+# Consumer Flow
 
-* Kafka Consumer
+```
+Producer
+      |
+      v
+Kafka Broker
+      |
+      v
+Topic (orders)
+      |
+      v
+Consumer Group
+      |
+      v
+Consumer Instance
+```
+
+Unlike a Producer, a Consumer never receives pushed messages.
+
+The Consumer continuously asks Kafka
+
+```
+Do you have any new messages?
+```
+
+This process is called
+
+```
+Polling
+```
+
+Internally
+
+```
+Consumer
+
+↓
+
+poll()
+
+↓
+
+Broker
+
+↓
+
+New Records
+
+↓
+
+Consumer
+```
+
+---
+
+# What is a Consumer Group?
+
+Suppose we have
+
+```
+Topic : orders
+
+Partitions
+
+P0
+P1
+P2
+```
+
+Now we start
+
+```
+Consumer-1
+
+Consumer-2
+```
+
+Both belong to
+
+```
+order-group
+```
+
+Kafka automatically distributes partitions.
+
+Example
+
+```
+Consumer-1
+
+Partition 0
+
+Partition 2
+
+Consumer-2
+
+Partition 1
+```
+
+This is called
+
+```
+Partition Assignment
+```
+
+Each partition is consumed by only one consumer inside the same consumer group.
+
+This guarantees that a message is processed only once by the group.
+
+---
+
+# What Happens If We Have More Consumers?
+
+Example
+
+```
+Partitions = 3
+
+Consumers = 5
+```
+
+Assignment
+
+```
+Consumer1 -> P0
+
+Consumer2 -> P1
+
+Consumer3 -> P2
+
+Consumer4 -> Idle
+
+Consumer5 -> Idle
+```
+
+Extra consumers remain idle because Kafka cannot assign the same partition to multiple consumers within the same group.
+
+---
+
+# What is Heartbeat?
+
+Every consumer periodically sends a heartbeat to Kafka.
+
+Heartbeat simply means
+
+```
+"I'm alive."
+```
+
+Internally
+
+```
+Consumer
+
+↓
+
+Heartbeat
+
+↓
+
+Group Coordinator
+```
+
+Kafka checks these heartbeats continuously.
+
+If heartbeats stop arriving within the configured session timeout, Kafka assumes that the consumer has failed.
+
+Default heartbeat interval is usually around **3 seconds**, and the default session timeout is typically **45 seconds** (depending on client configuration).
+
+---
+
+# Group Coordinator
+
+Every consumer group has one broker acting as the **Group Coordinator**.
+
+Responsibilities
+
+* Register consumers
+* Receive heartbeats
+* Detect failed consumers
+* Trigger rebalancing
+* Commit offsets
+
+---
+
+# What is Rebalancing?
+
+Suppose
+
+Initially
+
+```
+Consumer1 -> Partition0
+
+Consumer2 -> Partition1
+
+Consumer3 -> Partition2
+```
+
+Now Consumer2 crashes.
+
+Heartbeats stop.
+
+Kafka waits until the session timeout expires.
+
+The Group Coordinator detects the missing heartbeat.
+
+Kafka immediately starts
+
+```
+Rebalancing
+```
+
+New assignment
+
+```
+Consumer1
+
+Partition0
+
+Partition1
+
+Consumer3
+
+Partition2
+```
+
+No partition remains unassigned.
+
+---
+
+# What Triggers Rebalancing?
+
+Rebalancing occurs when
+
+* A new consumer joins the group
+* A consumer leaves the group
+* A consumer crashes
+* Heartbeats stop
+* Number of partitions changes (for example, partitions are added)
+
+---
+
+# What is Offset?
+
+Every message inside a partition has a unique offset.
+
+Example
+
+Partition 2
+
+```
+Offset 0
+
+Order1
+
+Offset 1
+
+Order2
+
+Offset 2
+
+Order3
+```
+
+Consumers remember the last processed offset.
+
+Next poll starts from the next offset.
+
+---
+
+# Offset Commit
+
+After successfully processing a message, the consumer commits its offset.
+
+Example
+
+```
+Message
+
+↓
+
+Process
+
+↓
+
+Commit Offset
+
+↓
+
+Next Message
+```
+
+If the consumer crashes before committing the offset, Kafka can deliver the same message again when the consumer restarts.
+
+This is why Kafka provides **at-least-once delivery** by default.
+
+---
+
+# Consumer Poll Cycle
+
+```
+Consumer
+
+↓
+
+poll()
+
+↓
+
+Receive Messages
+
+↓
+
+Process
+
+↓
+
+Commit Offset
+
+↓
+
+Heartbeat
+
+↓
+
+poll() again
+```
+
+This loop continues as long as the consumer is running.
+
+---
+
+# AKHQ Demonstration
+
+Using AKHQ we can observe
+
+* Topics
+* Partitions
+* Producer Messages
 * Consumer Groups
-* Heartbeats
-* Rebalancing
-* Offset Commit (Auto & Manual)
-* Retry Mechanism
-* Dead Letter Topic (DLT)
-* Idempotent Producer
-* Transactions
-* Exactly Once Semantics (EOS)
+* Offsets
+* Consumer Lag
+* Partition Assignment
+
+After sending
+
+```
+GET /orders/customer1
+```
+
+AKHQ displayed
+
+```
+Key
+
+customer1
+
+Partition
+
+2
+
+Offset
+
+0
+```
+
+Starting multiple consumers shows partition assignments under the **Consumer Groups** section.
+
+Stopping one consumer demonstrates **heartbeat timeout** followed by **automatic rebalancing**.
+
+---
+
+# Interview Questions Covered
+
+* What is a Consumer Group?
+* What is Polling?
+* Why does Kafka use poll() instead of push?
+* What is Heartbeat?
+* What is Group Coordinator?
+* What triggers Rebalancing?
+* Why can only one consumer read one partition within a group?
+* What is Offset?
+* What is Offset Commit?
+* What happens when a consumer crashes?
+* What is Consumer Lag?
+* Explain the complete consumer lifecycle.
+
