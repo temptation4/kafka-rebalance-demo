@@ -1,0 +1,3 @@
+ProducerServiceApplication.class
+com/example/producer/ProducerController.class
+com/example/producer/KafkaTopicConfig.class
